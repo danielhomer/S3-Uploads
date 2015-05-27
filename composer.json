@@ -1,0 +1,19 @@
+{
+	"name"       : "timeincuk/s3-uploads",
+	"description": "Store uploads in S3",
+	"homepage"   : "https://github.com/ipcmedia/s3-uploads/",
+	"type"       : "wordpress-plugin",
+	"license"    : "GPL-2.0+",
+	"authors"    : [
+		{
+			"name"    : "Daniel Homer",
+			"homepage": "http://danielhomer.me/"
+		},
+		{
+			"name"    : "Human Made Limited"
+		}
+	],
+	"require": {
+		"composer/installers": "~1.0"	
+	}
+}
