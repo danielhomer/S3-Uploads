@@ -16,11 +16,51 @@ class S3_Uploads {
 	 */
 	public static function get_instance() {
 
+		$s3_uploads_bucket = self::get_var( 'S3_UPLOADS_BUCKET' ) ;
+		$s3_uploads_key = self::get_var( 'S3_UPLOADS_KEY' );
+		$s3_uploads_secret = self::get_var( 'S3_UPLOADS_SECRET' );
+		$s3_uploads_bucket_url = self::get_var( 'S3_UPLOADS_BUCKET_URL' );
+		$s3_uploads_region = self::get_var( 'S3_UPLOADS_REGION' );
+		$s3_uploads_bucket_suffix = self::get_var( 'S3_UPLOADS_BUCKET_SUFFIX' );
+
+		if ( $s3_uploads_bucket_suffix ) {
+			$s3_uploads_bucket = $s3_uploads_bucket . '/' . $s3_uploads_bucket_suffix;
+		}
+
 		if ( ! self::$instance ) {
-			self::$instance = new S3_Uploads( S3_UPLOADS_BUCKET, S3_UPLOADS_KEY, S3_UPLOADS_SECRET, defined( 'S3_UPLOADS_BUCKET_URL' ) ? S3_UPLOADS_BUCKET_URL : null, defined( 'S3_UPLOADS_REGION' ) ? S3_UPLOADS_REGION : null );
+			self::$instance = new S3_Uploads( 
+				$s3_uploads_bucket, 
+				$s3_uploads_key, 
+				$s3_uploads_secret, 
+				$s3_uploads_bucket_url,
+				$s3_uploads_region
+				);
 		}
 
 		return self::$instance;
+
+	}
+
+	private static function get_var( $name, $try_options = true ) {
+
+		$result = null;
+
+		if ( getenv( $name ) ) {
+			$result = getenv( $name );
+		}
+
+		if ( defined( $name ) ) {
+			$result = constant( $name );
+		}
+
+		if ( $try_options ) {
+			$result = get_option( strtolower( $name ), null );
+		}
+
+		$result = apply_filters( strtolower( $name ), $result );
+
+		return $result;
+
 	}
 
 	public function __construct( $bucket, $key, $secret, $bucket_url = null, $region = null ) {
@@ -62,10 +102,11 @@ class S3_Uploads {
 			}
 		}
 
+
 		return $dirs;
 	}
 
-	public function get_s3_url() {
+	public function get_s3_url( $include_protocol = true ) {
 		if ( $this->bucket_url ) {
 			return $this->bucket_url;
 		}
@@ -73,7 +114,19 @@ class S3_Uploads {
 		$bucket = strtok( $this->bucket, '/' );
 		$path   = substr( $this->bucket, strlen( $bucket ) );
 
-		return 'https://' . $bucket . '.s3.amazonaws.com' . $path;
+		$domain_name = self::get_var( 's3_uploads_domain_name' );
+
+		if ( ! $domain_name ) {
+			$domain_name = $bucket . '.s3.amazonaws.com';
+		}
+
+		if ( $include_protocol ) {
+			$protocol = is_ssl() ? 'https://' : 'http://';
+		} else {
+			$protocol = '';
+		}
+
+		return $protocol . $domain_name . $path;
 	}
 
 	public function get_original_upload_dir() {
@@ -96,11 +149,6 @@ class S3_Uploads {
 			return $this->s3;
 
 		$params = array( 'key' => $this->key, 'secret' => $this->secret );
-
-		if ( $this->region ) {
-			$params['signature'] = 'v4';
-			$params['region'] = $this->region;
-		}
 
 		$this->s3 = Aws\Common\Aws::factory( $params )->get( 's3' );
 
@@ -134,4 +182,172 @@ class S3_Uploads {
 
 		return $file;
 	}
+
+	public function add_settings() {
+
+		register_setting(
+			'media',
+			's3_uploads_bucket',
+			array( $this, 'sanitize_option' )
+			);
+
+		register_setting(
+			'media',
+			's3_uploads_key',
+			array( $this, 'sanitize_option' )
+			);
+
+		register_setting(
+			'media',
+			's3_uploads_secret',
+			array( $this, 'sanitize_option' )
+			);
+
+		register_setting(
+			'media',
+			's3_uploads_domain_name',
+			array( $this, 'sanitize_domain_name' )
+			);
+
+		add_settings_section( 
+			's3_uploads_section', 
+			'S3 Uploads', 
+			false,
+			'media'
+			);
+
+		add_settings_field(
+			's3_uploads_bucket',
+			'Bucket Name',
+			array( $this, 'field_callback' ),
+			'media',
+			's3_uploads_section',
+			array( 's3_uploads_bucket')
+			);
+
+		add_settings_field(
+			's3_uploads_key',
+			'Access Key ID',
+			array( $this, 'field_callback' ),
+			'media',
+			's3_uploads_section',
+			array( 's3_uploads_key')
+			);
+
+		add_settings_field(
+			's3_uploads_secret',
+			'Access Key Secret',
+			array( $this, 'field_callback' ),
+			'media',
+			's3_uploads_section',
+			array( 's3_uploads_secret')
+			);
+
+		add_settings_field(
+			's3_uploads_domain_name',
+			'Domain Root',
+			array( $this, 'field_callback' ),
+			'media',
+			's3_uploads_section',
+			array( 's3_uploads_domain_name')
+			);
+
+	}
+
+	public function field_callback( array $args ) {
+		
+		$id = isset( $args[0] ) ? $args[0] : false;
+		
+		if ( ! $id ) {
+			return;
+		}
+
+		if ( ! $option = self::get_var( strtoupper( $id ), false ) ) {
+			
+			$option = get_option( $id, '' );
+
+			if ( ! $option && $id == 's3_uploads_domain_name' ) {
+				$attr = sprintf( ' placeholder="%s"', $this->get_s3_url( false ) );
+			}
+
+			if ( $id == 's3_uploads_bucket' ) {
+				$s3 = $this->s3();
+
+				try {
+					$results = $s3->listBuckets();
+				} catch ( Exception $e ) {
+					echo $e->getMessage();
+					return;
+				}
+
+				if ( ! isset( $results['Buckets'] ) ) {
+					return;
+				}
+
+				printf( '<select name=%s>', $id );
+				echo '<option value="">--Select a bucket--</option>';
+
+				foreach ( $results['Buckets'] as $bucket ) {
+					if ( strpos( $bucket['Name'], '.') ) {
+						continue; // We can't deal with buckets with dots in the name at the moment
+					}
+
+					if ( $bucket['Name'] === $option ) {
+						$attr = ' selected="selected"';
+					} else {
+						$attr = '';
+					}
+
+					printf( '<option value="%s"%s>%s</option>', $bucket['Name'], $attr, $bucket['Name'] );
+				}
+
+				echo '</select>';
+
+				if ( $suffix = self::get_var( 'S3_UPLOADS_BUCKET_SUFFIX' ) ) {
+					printf( '<code>/%s</code>', $suffix );
+				}
+
+				return;
+			}
+
+			if ( $id == 's3_uploads_secret' || $id == 's3_uploads_key' ) {
+				$type = 'password';
+			} else {
+				$type = 'text';
+			}
+
+			printf( '<input class="widefat" type="%s" id="%s" name="%s" value="%s"%s />', $type, $id, $id, $option, $attr );
+
+			if ( $id = 's3_uploads_domain_name' ) {
+				echo ' <span class="description">(Without http://)</span>';
+			}
+
+		} else {
+
+			if ( $id == 's3_uploads_secret' || $id == 's3_uploads_key' ) {
+				$option = 'Hidden for security';
+			}
+
+			printf( '<code>%s</code> <span class="description">(Set via constant, environment variable or filter)</span>', $option );
+
+		}
+
+	}
+
+	public function sanitize_option( $value ) {
+		
+		return esc_attr( $value );
+
+	}
+
+	public function sanitize_domain_name( $value ) {
+
+		$value = rtrim( $value, '/' );
+
+		$value = filter_var( $value, FILTER_SANITIZE_URL );
+
+		return $value;
+
+	}
+
 }
